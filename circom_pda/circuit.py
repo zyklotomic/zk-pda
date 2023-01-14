@@ -19,17 +19,18 @@ class CircomPdaCircuit:
             "  signal input in;",
             "  signal output out;",
             "",
-            f"  component cmp[{num_symbs}];",
+            f"  component cmp[{num_symbs+1}];",
         ]
 
         # symbol 0 is reserved for unrecognized symbol!!!!!
         res.append(f"  component oneHotDecoder = OneHotDecoder({num_symbs+1});")
         res.append("")
+        res.append(f"  oneHotDecoder.in[0] <== 0;")
         for symbol, i in self.pda.input_symbol_to_id.items():
             num_symbols = len(symbol.inner)
             if num_symbols == 1:
                 res.append(f"  // matching '{symbol.inner}'")
-                res.append(f"  component cmp[{i}] = IsEqual();")
+                res.append(f"  cmp[{i}] = IsEqual();")
                 res.append(f"  cmp[{i}].in[0] <== in;")
                 res.append(f"  cmp[{i}].in[1] <== {ord(symbol.inner)};")
             else:
@@ -49,7 +50,7 @@ class CircomPdaCircuit:
 
     def generate_all_symbol_types(self):
         return [
-            "template strSymbolTypes(strLen) {",
+            "template allSymbolTypes(strLen) {",
             "   signal input in[strLen];",
             "   signal output out[strLen];",
             "",
@@ -70,8 +71,8 @@ class CircomPdaCircuit:
         # ix is used to denote the ix-th state transition
         # into the same end state, for circom code gen
 
-        start_st = state_transition.start_state.n
-        end_st = state_transition.end_state.n
+        start_st = self.pda.state_to_id[state_transition.start_state]
+        end_st = self.pda.state_to_id[state_transition.end_state]
 
         _exp_sym = state_transition.expected_symbol
         exp_sym = self.pda.input_symbol_to_id[_exp_sym]
@@ -115,8 +116,9 @@ class CircomPdaCircuit:
         res = []
         for end_state in self.pda.transition_map:
             cnt = len(self.pda.transition_map[end_state])
+            state_id = self.pda.state_to_id[end_state]
             res.append(
-                f"    stateTrans[i][{end_state.n}] = "
+                f"    stateTrans[i][{state_id}] = "
                 f" StateTransitionCombinator({cnt}, stackDepth);"
             )
         return res
@@ -124,7 +126,8 @@ class CircomPdaCircuit:
     def generate_all_state_transitions(self):
         res = []
         for end_state, transitions in self.pda.transition_map.items():
-            res.append(f"    // transitions to state {end_state.n}")
+            state_id = self.pda.state_to_id[end_state]
+            res.append(f"    // transitions to state {state_id}")
             for i, t in enumerate(transitions): 
                 res.extend(self.generate_state_transition(t, i))
                 res.append("")
@@ -134,16 +137,31 @@ class CircomPdaCircuit:
     def generate_pda_accept_check(self):
         num_accept_states = len(self.pda.accept_states)
         if num_accept_states == 1:
+            state_id = self.pda.state_to_id[self.pda.accept_states[0]]
             res = [
-                f"  out <== states[strLength][{self.pda.accept_states[0].n}];"
+                f"  out <== states[strLength][{state_id}];"
             ]
         else:
             res = [
                 f"  component acceptCheck = MultiOR({num_accept_states});"
             ]
             for i, acc_state in enumerate(self.pda.accept_states):
-                res.append(f"  acceptCheck.in[i] <== states[strLength][{acc_state.n}];")
+                res.append(f"  acceptCheck.in[{i}] <== states[strLength][{acc_state.n}];")
             res.append("  out <== acceptCheck.out;")
+
+        return res
+
+    def generate_state_init(self):
+        init_state_id = self.pda.state_to_id[self.pda.init_state]
+
+        res = [
+            "  states[0][0] <== 0;",
+            f"  states[0][{init_state_id}] <== 1;"
+        ]
+
+        for i in range(1, len(self.pda.state_to_id)+1):
+            if i != init_state_id:
+                res.append(f"  states[0][{i}] <== 0;");
 
         return res
 
@@ -166,7 +184,8 @@ class CircomPdaCircuit:
                 
 
     def generate_pda(self):
-        num_states = len(self.pda.states)
+        num_states = len(self.pda.state_to_id)
+        # we do num_states+1 because state 0 is reserved for fail state
         pda_template = [
             "template PDA(strLength, stackDepth) {",
             "\n".join(self.generate_symbol_id_comments()),
@@ -174,48 +193,75 @@ class CircomPdaCircuit:
             "  signal output out; // 0 for rej, 1 for accept",
             "",
             "  signal stack[strLength+1][stackDepth];",
-            f"  signal states[strLength+1][{num_states}];",
+            f"  signal states[strLength+1][{num_states+1}];",
             "",
-            "  states[0][0] <== 1;",
-            "  states[0][1] <== 0;",
+            "\n".join(self.generate_state_init()),
             "",
             "  for (var i=0; i<stackDepth; i++) stack[0][i] <== 0;",
             "",
-            f"  component stateTrans[strLength][{num_states}]",
+            f"  component stateTrans[strLength][{num_states+1}];",
             "  component stateDecoder[strLength];",
             "  component tokenType = allSymbolTypes(strLength);",
             "  tokenType.in <== str;",
             "  component stackCombinator[strLength];",
             "",
             "  for (var i=0; i<strLength; i++) {",
-            f"    stateDecoder[i] = OneHotDecoder({num_states})",
-            f"    for(var k=0; k<{num_states}; k++) stateDecoder[i].in[k] <== states[i][k];",
-            f"    var currentTokenType = tokenType.out[i]",
+            f"    stateDecoder[i] = OneHotDecoder({num_states+1});",
+            f"    stateDecoder[i].in[0] <== 0;",
+            f"    for (var k=1; k<{num_states+1}; k++) stateDecoder[i].in[k] <== states[i][k];",
+            f"    var currentTokenType = tokenType.out[i];",
             f"    var currentState = stateDecoder[i].out;",
             "",
             "\n".join(self.generate_state_transitions_init()),
             "",
             "    // current state-specific args",
-            f"    for(var k=0; k<{num_states}; k++) " + "{",
+            f"    for(var k=1; k<{num_states+1}; k++) " + "{",
             "      stateTrans[i][k].stack <== stack[i];",
-            "      stateTrans[i][k].currentState <= currentState",
+            "      stateTrans[i][k].currentState <== currentState;",
             "      stateTrans[i][k].currentTokenType <== currentTokenType;",
             "    }",
             "",
             "\n".join(self.generate_all_state_transitions()),
             "",
-            f"    stackCombinator[i] = StackCombinator({num_states}, stackDepth);",
-            f"    for (var k=0; k<{num_states}; k++) " + "{",
+            f"    stackCombinator[i] = StackCombinator({num_states+1}, stackDepth);",
+            "    for (var d=0; d<stackDepth; d++) {"
+            "      stackCombinator[i].stack[0][d] <== 0;",
+            "    }"
+            f"    for (var k=1; k<{num_states+1}; k++) " + "{",
             f"      states[i+1][k] <== stateTrans[i][k].shouldTransition;",
-            "       stackCombinator[i].stack[k] <== stateTrans[i][k].newStack;",
+            "      stackCombinator[i].stack[k] <== stateTrans[i][k].newStack;",
             "    }",
             "    stack[i+1] <== stackCombinator[i].stackSum;",
             "  }",
             "\n".join(self.generate_pda_accept_check()),
             "}"
-        ]
-
+        ] 
 
         return pda_template
+
+    def generate_main(self):
+        pragma_imports = "\n".join([
+            "pragma circom 2.0.8;",
+            "",
+            'include "./node_modules/circomlib/circuits/comparators.circom";',
+            'include "./node_modules/circomlib/circuits/gates.circom";',
+            'include "./pda.circom";',
+        ])
+
+        get_symbol_type = "\n".join(self.generate_symbol_lookup())
+        all_symbol_types = "\n".join(self.generate_all_symbol_types())
+
+        pda = "\n".join(self.generate_pda())
+
+        return "\n".join([
+            pragma_imports,
+            "",
+            get_symbol_type,
+            "",
+            all_symbol_types,
+            "",
+            pda
+        ])
+        
 
 

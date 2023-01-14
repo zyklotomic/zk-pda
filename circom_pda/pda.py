@@ -25,7 +25,7 @@ class InputSymbol:
 
 @dataclass(eq=False)
 class State:
-    n: int
+    inner: any
 
 @dataclass
 class StateTransition:
@@ -37,23 +37,31 @@ class StateTransition:
 
 class Pda:  
 
-    def __init__(self, transitions, accept_states):
+    def __init__(self, transitions, init_state, accept_states):
         self._transitions = transitions
+        self.init_state = init_state
         self.state_to_id = {}
         self.input_symbol_to_id = {}
         self.stack_symbol_to_id = {}
+        self.state_to_id = {}
 
         # dst -> transition with end state == dst
         self.transition_map = defaultdict(list)
-        self.states = set()
         self.accept_states = accept_states
 
-        for t in transitions:
-            self.states.add(t.start_state)
-            self.states.add(t.end_state)
+        # self.failed_state = State("FAILED")
+        # self.state_to_id[self.failed_state] = 0
 
-            # id 0 is RESERVED!!!!! for unknown input symbol
+        for t in transitions:
+            # id 0 is RESERVED!!!!! for unknown input symbol,
+            # failed state
             # and default stack symbol value
+            if t.start_state not in self.state_to_id:
+                self.state_to_id[t.start_state] = len(self.state_to_id) + 1 
+
+            if t.end_state not in self.state_to_id:
+                self.state_to_id[t.end_state] = len(self.state_to_id) + 1
+
             if t.expected_symbol not in self.input_symbol_to_id:
                 self.input_symbol_to_id[t.expected_symbol] = 1 + len(self.input_symbol_to_id)
 
@@ -63,7 +71,7 @@ class Pda:
 
             if t.stack_action.stack_end not in self.stack_symbol_to_id:
                 self.stack_symbol_to_id[t.stack_action.stack_end] = \
-                    1 + len(self.stack_symbol_to_id)
+                    1 + len(self.stack_symbol_to_id) 
 
             self.transition_map[t.end_state].append(t)
 
