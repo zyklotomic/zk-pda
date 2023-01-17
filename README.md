@@ -89,9 +89,9 @@ accomplish in Circom. We have not looked into this yet,
 but this probably means we can't fully parse all context-free languages yet.
 
 ## TODO
-- [] Constraining multi-character groups
-- [] Detecting stack overflows
-- [] Look into epsilon transitions
+- [ ] Constraining multi-character groups
+- [ ] Detecting stack overflows
+- [ ] Look into epsilon transitions
 
 ## Contributors
 Ethan
