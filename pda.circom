@@ -19,6 +19,15 @@ template MultiOR(N) {
   out <== accum[N-1];
 }
 
+template MultiSUM(N) {
+    signal input in[N];
+    signal output out;
+
+    var total = 0;
+    for (var i = 0; i<N; i++) total += in[i];
+    out <== total;
+}
+
 template OneHotDecoder(n) {
     // zero-indexed!!!
     signal input in[n];
@@ -44,7 +53,7 @@ template StackPush(stackDepth) {
   signal input a;
   signal output newStack[stackDepth];
 
-  for (var i=1; i<stackDepth-1; i++) {
+  for (var i=1; i<stackDepth; i++) {
     newStack[i] <== stack[i-1];
   }
   newStack[0] <== a;
@@ -62,7 +71,7 @@ template StackPopPush(stackDepth) {
 }
 
 
-template StateTransition(stackDepth) {
+template StateTransition(stackDepth, bufferLength) {
   signal input stack[stackDepth];
   signal input expectedStackTop;
   // signifies eps -> esp transition, ignores stack
@@ -113,6 +122,26 @@ template StateTransition(stackDepth) {
     newStack[i] <== shouldTransition * stackMux.newStack[i];
   }
 
+  // char capture logic
+  signal input currentChar;
+  signal input buffer[bufferLength];
+  signal input numCapturedChars;
+  signal input shouldCaptureChar;
+
+  signal output newBuffer[bufferLength];
+  signal output newNumCapturedChars;
+
+  component bufferMux = BufferMux(bufferLength);
+  bufferMux.shouldCaptureChar <== shouldCaptureChar;
+  bufferMux.currentChar <== currentChar;
+  bufferMux.buffer <== buffer;
+  bufferMux.numCapturedChars <== numCapturedChars;
+
+  newNumCapturedChars <== shouldTransition * bufferMux.newNumCapturedChars;
+  for (var i=0; i<bufferLength; i++) {
+    newBuffer[i] <== shouldTransition * bufferMux.newBuffer[i];
+  }
+
 }
 
 // for when no states transitions to the destination state
@@ -140,7 +169,7 @@ template DummyStateTransition(stackDepth) {
   for (var i=0; i<stackDepth; i++) newStack[i] <== 0;
 }
 
-template StateTransitionCombinator(N, stackDepth) {
+template StateTransitionCombinator(N, stackDepth, bufferLength) {
   signal input stack[stackDepth];
   signal input expectedStackTop[N];
   signal input ignoreStack[N];
@@ -154,9 +183,14 @@ template StateTransitionCombinator(N, stackDepth) {
   signal input stackAction[N];
   signal input stackInput[N];
 
+  signal input currentChar;
+  signal input buffer[bufferLength];
+  signal input numCapturedChars;
+  signal input shouldCaptureChar[N];
+
   component stateTransition[N];
   for (var i=0; i<N; i++) {
-    stateTransition[i] = StateTransition(stackDepth);
+    stateTransition[i] = StateTransition(stackDepth, bufferLength);
     stateTransition[i].stack <== stack;
     stateTransition[i].expectedStackTop <== expectedStackTop[i];
     stateTransition[i].ignoreStack <== ignoreStack[i];
@@ -169,16 +203,26 @@ template StateTransitionCombinator(N, stackDepth) {
 
     stateTransition[i].stackAction <== stackAction[i];
     stateTransition[i].stackInput <== stackInput[i];
+
+    stateTransition[i].currentChar <== currentChar;
+    stateTransition[i].buffer <== buffer;
+    stateTransition[i].numCapturedChars <== numCapturedChars;
+    stateTransition[i].shouldCaptureChar <== shouldCaptureChar[i];
   }
 
   signal output shouldTransition;
   // all 0's if !shouldTransition
   signal output newStack[stackDepth];
+  // all 0's if !shouldTransition
+  signal output newBuffer[bufferLength];
+  // 0 if !shouldTransition
+  signal output newNumCapturedChars;
 
   component orN = MultiOR(N);
   for (var i=0; i<N; i++) {
     orN.in[i] <== stateTransition[i].shouldTransition;
   }
+
   shouldTransition <== orN.out;
 
   signal newStackVal[stackDepth][N];
@@ -190,6 +234,51 @@ template StateTransitionCombinator(N, stackDepth) {
     }
     newStack[j] <== newStackVal[j][N-1];
   }
+
+  signal newNumCapturedCharsVal[N];
+  newNumCapturedCharsVal[0] <== shouldTransition * stateTransition[0].newNumCapturedChars;
+  for (var i=1; i<N; i++) {
+    var k = shouldTransition * stateTransition[i].newNumCapturedChars;
+    newNumCapturedCharsVal[i] <== newNumCapturedCharsVal[i-1] + k;
+  }
+  newNumCapturedChars <== newNumCapturedCharsVal[N-1];
+
+  signal newBufferVal[bufferLength][N];
+  for (var j=0; j<bufferLength; j++) {
+    newBufferVal[j][0] <== shouldTransition * stateTransition[0].newBuffer[j];
+    for (var i=1; i<N; i++) {
+      var k = shouldTransition * stateTransition[i].newBuffer[j];
+      newBufferVal[j][i] <== newBufferVal[j][i-1] + k;
+    }
+    newBuffer[j] <== newBufferVal[j][N-1];
+  }
+
+}
+
+template BufferMux(bufferLength) {
+  // 0 for should not, 1 for should
+  signal input shouldCaptureChar;
+  signal input currentChar;
+  signal input buffer[bufferLength];
+  signal input numCapturedChars;
+
+  signal output newBuffer[bufferLength];
+  signal output newNumCapturedChars;
+
+  // reuse stack logic to push onto buffer
+  component stackMux = StackMux(bufferLength);
+  stackMux.stackAction <== 1; // push
+  stackMux.stack <== buffer;
+  stackMux.stackInput <== currentChar;
+
+  signal tmp[bufferLength][2];
+  for (var i=0; i<bufferLength; i++) {
+    tmp[i][0] <== shouldCaptureChar * stackMux.newStack[i];
+    tmp[i][1] <== tmp[i][0] + (1 - shouldCaptureChar) * buffer[i];
+
+    newBuffer[i] <== tmp[i][1];
+  }
+  newNumCapturedChars <== numCapturedChars + shouldCaptureChar;
 }
 
 template StackMux(stackDepth) {
