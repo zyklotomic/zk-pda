@@ -38,5 +38,5 @@ transitions = [
 # PDA in Circom for balanced parenthesis
 accept_states = [s0]
 paren_pda = Pda(transitions, s0, accept_states)
-paren_circuit = circuit.CircomPdaCircuit(json_pda)
+paren_circuit = circuit.CircomPdaCircuit(paren_pda)
 print(paren_circuit.generate_main())
