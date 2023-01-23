@@ -35,10 +35,11 @@ class CircomPdaCircuit:
                 res.append(f"  cmp[{i}].in[1] <== {ord(symbol.inner)};")
             else:
                 res.append(f"  // matching {list(symbol.inner)}")
-                res.append(f"  component cmp[{i}] = MultiOR({num_symbols});")
-                for ch in symbol.inner:
-                    res.append(f"  cmp[{i}] <-- (in == {ord(ch)}) ? 1 : 0;")
-                    res.append(f"  cmp[{i}] * (in - {ord(ch)})) === 0;") 
+                res.append(f"  cmp[{i}] = MultiOR({num_symbols});")
+                res.append("  // WARNING/TODO: Not properly constrained ")
+                for sym_n, ch in enumerate(symbol.inner):
+                    res.append(f"  cmp[{i}].in[{sym_n}] <-- (in == {ord(ch)}) ? 1 : 0;")
+                    res.append(f"  cmp[{i}].in[{sym_n}] * (in - {ord(ch)}) === 0;") 
 
             res.append(f"  oneHotDecoder.in[{i}] <== cmp[{i}].out;")
             res.append("")
@@ -100,7 +101,9 @@ class CircomPdaCircuit:
             ign_stk = 0
             stk_inp = self.pda.stack_symbol_to_id[t[1]]
 
-        # TODO: Comment state transitions
+        should_capture_char = 0
+        if state_transition.should_capture_char:
+            should_capture_char = 1
 
         return [
             f"    // {_exp_sym.inner}, {_sa.stack_start.inner} -> {_sa.stack_end.inner}",
@@ -109,7 +112,8 @@ class CircomPdaCircuit:
             f"    stateTrans[i][{end_st}].expectedState[{ix}] <== {start_st};",
             f"    stateTrans[i][{end_st}].expectedTokenType[{ix}] <== {exp_sym};", 
             f"    stateTrans[i][{end_st}].stackAction[{ix}] <== {stk_act};",
-            f"    stateTrans[i][{end_st}].stackInput[{ix}] <== {stk_inp};"
+            f"    stateTrans[i][{end_st}].stackInput[{ix}] <== {stk_inp};",
+            f"    stateTrans[i][{end_st}].shouldCaptureChar[{ix}] <== {should_capture_char};",
         ]
 
     def generate_state_transitions_init(self):
@@ -119,7 +123,7 @@ class CircomPdaCircuit:
             state_id = self.pda.state_to_id[end_state]
             res.append(
                 f"    stateTrans[i][{state_id}] = "
-                f" StateTransitionCombinator({cnt}, stackDepth);"
+                f" StateTransitionCombinator({cnt}, stackDepth, bufferLength);"
             )
         return res
 
@@ -181,29 +185,35 @@ class CircomPdaCircuit:
             comments.append(f"  // {input_symb.inner} -> {sym_id}")
 
         return comments
-                
+
 
     def generate_pda(self):
         num_states = len(self.pda.state_to_id)
         # we do num_states+1 because state 0 is reserved for fail state
         pda_template = [
-            "template PDA(strLength, stackDepth) {",
+            "template PDA(strLength, stackDepth, bufferLength) {",
             "\n".join(self.generate_symbol_id_comments()),
             "  signal input str[strLength];",
             "  signal output out; // 0 for rej, 1 for accept",
             "",
             "  signal stack[strLength+1][stackDepth];",
             f"  signal states[strLength+1][{num_states+1}];",
+            "  signal buffer[strLength+1][bufferLength];",
+            "  signal numCapturedChars[strLength+1];",
             "",
             "\n".join(self.generate_state_init()),
             "",
             "  for (var i=0; i<stackDepth; i++) stack[0][i] <== 0;",
+            "  for (var i=0; i<bufferLength; i++) buffer[0][i] <== 0;",
+            "  numCapturedChars[0] <== 0;",
             "",
             f"  component stateTrans[strLength][{num_states+1}];",
             "  component stateDecoder[strLength];",
             "  component tokenType = allSymbolTypes(strLength);",
             "  tokenType.in <== str;",
             "  component stackCombinator[strLength];",
+            "  component bufferCombinator[strLength];",
+            "  component capturedCountCombinator[strLength];",
             "",
             "  for (var i=0; i<strLength; i++) {",
             f"    stateDecoder[i] = OneHotDecoder({num_states+1});",
@@ -219,29 +229,48 @@ class CircomPdaCircuit:
             "      stateTrans[i][k].stack <== stack[i];",
             "      stateTrans[i][k].currentState <== currentState;",
             "      stateTrans[i][k].currentTokenType <== currentTokenType;",
+            "      stateTrans[i][k].currentChar <== str[i];",
+            "      stateTrans[i][k].buffer <== buffer[i];",
+            "      stateTrans[i][k].numCapturedChars <== numCapturedChars[i];",
             "    }",
             "",
             "\n".join(self.generate_all_state_transitions()),
             "",
             f"    stackCombinator[i] = StackCombinator({num_states+1}, stackDepth);",
-            "    for (var d=0; d<stackDepth; d++) {"
-            "      stackCombinator[i].stack[0][d] <== 0;",
-            "    }"
+            f"    bufferCombinator[i] = StackCombinator({num_states+1}, bufferLength);",
+            f"    capturedCountCombinator[i] = MultiSUM({num_states+1});",
+            "    for (var d=0; d<stackDepth; d++) stackCombinator[i].stack[0][d] <== 0;",
+            "    for (var d=0; d<bufferLength; d++) bufferCombinator[i].stack[0][d] <== 0;",
+            "    capturedCountCombinator[i].in[0] <== 0;",
+            "",
             f"    for (var k=1; k<{num_states+1}; k++) " + "{",
             f"      states[i+1][k] <== stateTrans[i][k].shouldTransition;",
             "      stackCombinator[i].stack[k] <== stateTrans[i][k].newStack;",
+            "      bufferCombinator[i].stack[k] <== stateTrans[i][k].newBuffer;",
+            "      capturedCountCombinator[i].in[k] <== stateTrans[i][k].newNumCapturedChars;",
             "    }",
+            "",
             "    stack[i+1] <== stackCombinator[i].stackSum;",
+            "    buffer[i+1] <== bufferCombinator[i].stackSum;",
+            "    numCapturedChars[i+1] <== capturedCountCombinator[i].out;",
+            "",
+            "    // signal outputBuffer[bufferLength];",
+            "    // signal outputNumCapturedChars;",
+            "    // outputBuffer <== buffer[strLength];",
+            "    // outputNumCapturedChars <== numCaptureChars[strLength];",
+            "    // RECOMMENDATION: Constrain buffer contents with desired logic!",
+            "",
             "  }",
             "\n".join(self.generate_pda_accept_check()),
-            "}"
+            "}",
+            "",
         ] 
 
         return pda_template
 
     def generate_main(self):
         pragma_imports = "\n".join([
-            "pragma circom 2.0.8;",
+            "pragma circom 2.1.2;",
             "",
             'include "./node_modules/circomlib/circuits/comparators.circom";',
             'include "./node_modules/circomlib/circuits/gates.circom";',
@@ -262,6 +291,4 @@ class CircomPdaCircuit:
             "",
             pda
         ])
-        
-
 

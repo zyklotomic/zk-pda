@@ -32,10 +32,11 @@ class StateTransition:
     start_state: State
     end_state: State
     expected_symbol: InputSymbol
-    stack_action: StackAction  
- 
+    stack_action: StackAction
+    should_capture_char: bool = False
 
-class Pda:  
+
+class Pda: 
 
     def __init__(self, transitions, init_state, accept_states):
         self._transitions = transitions
@@ -48,9 +49,6 @@ class Pda:
         # dst -> transition with end state == dst
         self.transition_map = defaultdict(list)
         self.accept_states = accept_states
-
-        # self.failed_state = State("FAILED")
-        # self.state_to_id[self.failed_state] = 0
 
         for t in transitions:
             # id 0 is RESERVED!!!!! for unknown input symbol,
@@ -74,19 +72,3 @@ class Pda:
                     1 + len(self.stack_symbol_to_id) 
 
             self.transition_map[t.end_state].append(t)
-
-        # for t in transitions:
-        #     if t.start_state not in self.state_to_id:
-        #         self.state_to_id[t.start_state] = len(self.state_to_id)
-        #     if t.end_state not in self.state_to_id:
-        #         self.state_to_id[t.end_state] = len(self.state_to_id)
-        #     if t.input_symbol not in self.input_symbol_to_id:
-        #         self.input_symbol_to_id[t.input_symbol] = len(self.input_symbol_to_id)
-        #     if t.stack_symbol not in self.stack_symbol_to_id:
-        #         self.stack_symbol_to_id[t.stack_symbol] = len(self.stack_symbol_to_id)
-
-        #     self.transition_map[t.end_state].append(t)
-        #     self.states.add(t.start_state)
-        #     self.states.add(t.end_state)
- 
-	
